@@ -4,3 +4,4 @@ Pillow>=10.0.0
 pywin32>=306; sys_platform == "win32"
 requests>=2.31.0
 pyinstaller>=6.3.0
+tkinterdnd2>=0.4.2

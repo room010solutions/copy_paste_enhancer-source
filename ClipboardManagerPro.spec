@@ -5,7 +5,7 @@ block_cipher = None
 
 # customtkinter ships theme/asset JSON files that PyInstaller won't find
 # automatically — collect_data_files pulls them in explicitly.
-datas = collect_data_files("customtkinter")
+datas = collect_data_files("customtkinter") + collect_data_files("tkinterdnd2")
 
 a = Analysis(
     ['copy_paste_02.py'],       # rename here if you rename your main script

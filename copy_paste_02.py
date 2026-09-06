@@ -6,9 +6,21 @@ import os
 import json
 import random
 import platform
+import struct
 from datetime import datetime
 from PIL import Image, ImageTk
 from pathlib import Path
+from tkinterdnd2 import TkinterDnD, DND_FILES, DND_TEXT, COPY
+
+
+class DnDCTk(TkinterDnD.DnDWrapper, ctk.CTk):
+    """customtkinter's CTk doesn't inherit from TkinterDnD's Tk, so drag-and-drop
+    is bolted on via this mixin — the standard pattern for combining
+    customtkinter with tkinterdnd2."""
+
+    def __init__(self, *args, **kwargs):
+        ctk.CTk.__init__(self, *args, **kwargs)
+        self.TkdndVersion = TkinterDnD._require(self)
 
 
 class ClipboardManager:
@@ -31,7 +43,7 @@ class ClipboardManager:
         ctk.set_default_color_theme("blue")
 
         # Main window
-        self.window = ctk.CTk()
+        self.window = DnDCTk()
         self.window.title("Clipboard Manager Pro")
         self.window.geometry("900x700")
         self.window.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -67,10 +79,23 @@ class ClipboardManager:
         # Warn about missing pywin32 only once per session
         self._pywin32_warning_shown = False
 
+        # Warn about missing pywin32 only once per session
+        self._pywin32_warning_shown = False
+
         # Track scheduled marquee `after()` callbacks so we can cancel them
-        # when the preview panel refreshes — otherwise they keep firing
-        # against widgets that no longer exist
+        # when the preview panel refreshes.
         self._marquee_jobs = []
+
+        # Drag-and-drop visual feedback
+        self._drag_visual = None
+        self._drag_visual_job = None
+
+        # Distinguish a genuine click (select the row) from the start of a
+        # native drag (don't also toggle selection). Tracked per press since
+        # only one press-drag sequence is ever in flight at a time.
+        self._press_start = None       # (x_root, y_root) at ButtonPress
+        self._drag_started = False     # set True once <<DragInitCmd>> actually fires
+        self.CLICK_MOVE_THRESHOLD = 4  # pixels of movement before it counts as a drag
 
         # Timestamp until which the monitor thread ignores clipboard changes —
         # prevents our own programmatic copies from being re-detected as new items
@@ -85,8 +110,230 @@ class ClipboardManager:
 
         # Start clipboard monitoring
         self.monitoring = True
-        self.monitor_thread = threading.Thread(target=self.monitor_clipboard, daemon=True)
+        self.monitor_thread = threading.Thread(
+            target=self.monitor_clipboard,
+            daemon=True
+        )
         self.monitor_thread.start()
+
+    # ------------------------------------------------------------------
+    # Drag-and-drop visual feedback
+    # ------------------------------------------------------------------
+
+    def show_drag_visual(self, paths, event=None, is_text=False):
+        """Show a visual indicator containing the filename(s) — or a text
+        preview — being dragged."""
+
+        self.hide_drag_visual()
+
+        if not paths:
+            return
+
+        paths = list(paths)
+
+        if is_text:
+
+            message = (
+                "📝 DRAGGING TEXT\n"
+                f"{paths[0]}"
+            )
+
+        elif len(paths) == 1:
+
+            filename = os.path.basename(paths[0])
+
+            message = (
+                "📄 DRAGGING FILE\n"
+                f"{filename}"
+            )
+
+        else:
+
+            filenames = [
+                os.path.basename(path)
+                for path in paths[:3]
+            ]
+
+            message = (
+                f"📁 DRAGGING {len(paths)} FILES\n"
+                + "\n".join(f"• {name}" for name in filenames)
+            )
+
+            if len(paths) > 3:
+                message += (
+                    f"\n• ... and {len(paths) - 3} more"
+                )
+
+        self._drag_visual = ctk.CTkLabel(
+            self.window,
+            text=message,
+            font=ctk.CTkFont(
+                size=12,
+                weight="bold"
+            ),
+            fg_color=("gray85", "gray20"),
+            text_color=("black", "white"),
+            corner_radius=10,
+            justify="left",
+            padx=12,
+            pady=8
+        )
+
+        try:
+
+            if event is not None:
+
+                x = (
+                    event.x_root
+                    - self.window.winfo_rootx()
+                    + 20
+                )
+
+                y = (
+                    event.y_root
+                    - self.window.winfo_rooty()
+                    + 20
+                )
+
+            else:
+
+                x = (
+                    self.window.winfo_pointerx()
+                    - self.window.winfo_rootx()
+                    + 20
+                )
+
+                y = (
+                    self.window.winfo_pointery()
+                    - self.window.winfo_rooty()
+                    + 20
+                )
+
+        except Exception:
+
+            x = 20
+            y = 20
+
+        self._drag_visual.place(
+            x=x,
+            y=y
+        )
+
+        self._drag_visual.lift()
+        
+    def hide_drag_visual(self):
+        """Remove the drag visual indicator."""
+
+        if self._drag_visual_job is not None:
+            try:
+                self.window.after_cancel(self._drag_visual_job)
+            except Exception:
+                pass
+
+            self._drag_visual_job = None
+
+        if self._drag_visual is not None:
+            try:
+                if self._drag_visual.winfo_exists():
+                    self._drag_visual.destroy()
+            except Exception:
+                pass
+
+        self._drag_visual = None
+
+    def schedule_drag_visual_hide(self, delay=700):
+        """Schedule removal of the drag visual."""
+
+        if self._drag_visual_job is not None:
+            try:
+                self.window.after_cancel(self._drag_visual_job)
+            except Exception:
+                pass
+
+        self._drag_visual_job = self.window.after(
+            delay,
+            self.hide_drag_visual
+        )
+
+    def _bind_file_drag_source(self, widget, file_paths):
+        """Register a widget as a native Windows file drag source."""
+
+        paths = (
+            list(file_paths)
+            if isinstance(file_paths, (list, tuple))
+            else [file_paths]
+        )
+
+        valid_paths = [
+            os.path.abspath(str(path))
+            for path in paths
+            if isinstance(path, str) and os.path.exists(path)
+        ]
+
+        if not valid_paths:
+            return
+
+        try:
+            widget.drag_source_register(1, DND_FILES)
+
+            def drag_init(event, paths=valid_paths):
+
+                # A real drag is underway — the pending click-release
+                # handler must not also toggle this item's checkbox.
+                self._drag_started = True
+
+                # Refresh the visual in case the press-time one already faded
+                self.show_drag_visual(paths, event)
+
+                # TkDND expects a Tcl-formatted list.
+                data = self.window.tk.call(
+                    "list",
+                    *paths
+                )
+
+                return (
+                    COPY,
+                    DND_FILES,
+                    data
+                )
+
+            widget.dnd_bind(
+                "<<DragInitCmd>>",
+                drag_init
+            )
+
+        except Exception as e:
+            print(f"File drag source setup failed: {e}")
+
+    def _bind_text_drag_source(self, widget, text):
+        """Bind a widget as a native TkDND text drag source. Mirrors
+        _bind_file_drag_source — click-vs-drag handling and the preview
+        visual live in _on_item_press/_on_item_release; this just wires the
+        drag payload."""
+
+        if not text:
+            return
+
+        preview = text if len(text) <= 60 else text[:60] + "..."
+
+        try:
+            widget.drag_source_register(1, DND_TEXT)
+
+            def drag_init(event, text=text, preview=preview):
+
+                self._drag_started = True
+                self.show_drag_visual([preview], event, is_text=True)
+
+                return (
+                    (COPY,),
+                    (DND_TEXT,),
+                    text
+                )
+
+            widget.dnd_bind("<<DragInitCmd>>", drag_init)
+
+        except Exception as e:
+            print(f"Could not bind text drag source: {e}")
 
     # ------------------------------------------------------------------
     # UI construction
@@ -141,6 +388,17 @@ class ClipboardManager:
             font=ctk.CTkFont(size=12)
         )
         self.copy_files_button.pack(side="right", padx=5)
+
+        # Quick guide button (right side)
+        self.guide_button = ctk.CTkButton(
+            self.top_controls,
+            text="❔ Quick Guide",
+            command=self.open_quick_guide_dialog,
+            width=110,
+            height=30,
+            font=ctk.CTkFont(size=12)
+        )
+        self.guide_button.pack(side="right", padx=5)
 
         # Instructions
         self.instructions = ctk.CTkLabel(
@@ -462,6 +720,41 @@ class ClipboardManager:
                 time.sleep(0.05)
         return None
 
+    def _copy_files_to_clipboard_windows(self, file_list):
+        """Write files to the clipboard as a native CF_HDROP — the same format
+        Explorer produces. This replaces the old `powershell.exe -Command
+        Set-Clipboard` call, which briefly flashed a console window because
+        the child process gets its own console when the parent (customtkinter,
+        no attached console) spawns it."""
+        try:
+            import win32clipboard
+        except ImportError:
+            if not self._pywin32_warning_shown:
+                self._pywin32_warning_shown = True
+                self.window.after(0, lambda: self.show_toast(
+                    "File-copy needs pywin32: pip install pywin32", "orange"
+                ))
+            return False
+
+        # sizeof(DROPFILES): DWORD pFiles + POINT pt (2x LONG) + BOOL fNC + BOOL fWide
+        offset = 20
+        file_block = ('\0'.join(file_list) + '\0\0').encode('utf-16-le')
+        dropfiles = struct.pack('Iiiii', offset, 0, 0, 0, 1) + file_block
+
+        for _ in range(3):
+            try:
+                win32clipboard.OpenClipboard()
+                try:
+                    win32clipboard.EmptyClipboard()
+                    win32clipboard.SetClipboardData(win32clipboard.CF_HDROP, dropfiles)
+                    return True
+                finally:
+                    win32clipboard.CloseClipboard()
+            except Exception:
+                # Clipboard transiently locked by another process — retry briefly
+                time.sleep(0.05)
+        return False
+
     def add_files_manually(self):
         """Open file dialog to add files"""
         from tkinter import filedialog
@@ -551,88 +844,260 @@ class ClipboardManager:
         self.update_preview()
 
     def create_clipboard_item(self, index, content, was_selected=False, item_type='text'):
-        """Create a UI element for each clipboard item"""
-        is_pinned = index < len(self.clipboard_pinned) and self.clipboard_pinned[index]
+        """Create one clipboard history item."""
+
+        is_pinned = (
+            index < len(self.clipboard_pinned)
+            and self.clipboard_pinned[index]
+        )
 
         if is_pinned:
-            item_frame = ctk.CTkFrame(self.scrollable_frame, border_width=2, border_color="#DAA520")
+            item_frame = ctk.CTkFrame(
+                self.scrollable_frame,
+                border_width=2,
+                border_color="#DAA520"
+            )
         else:
             item_frame = ctk.CTkFrame(self.scrollable_frame)
+
         item_frame.pack(fill="x", pady=5, padx=5)
 
-        # Checkbox for selection
+        # --------------------------------------------------------------
+        # Checkbox
+        # --------------------------------------------------------------
+
         checkbox_var = ctk.BooleanVar(value=was_selected)
+
         checkbox = ctk.CTkCheckBox(
             item_frame,
             text="",
             variable=checkbox_var,
             width=20,
-            command=lambda i=index, v=checkbox_var: self.on_checkbox_toggle(i, v)
+            command=lambda i=index, v=checkbox_var:
+                self.on_checkbox_toggle(i, v)
         )
         checkbox.pack(side="left", padx=5)
 
         self.selected_items[index] = checkbox_var
         self.checkboxes[index] = checkbox
 
-        # Determine display text and icon
+        # --------------------------------------------------------------
+        # Determine display text and icon FIRST
+        # --------------------------------------------------------------
+
         if item_type == 'file':
-            if isinstance(content, list):
-                if len(content) == 1:
-                    display_text = os.path.basename(content[0])
-                    icon = "📄"
-                else:
-                    display_text = f"{len(content)} files selected"
-                    icon = "📁"
-            else:
-                display_text = os.path.basename(content)
+
+            paths = content if isinstance(content, list) else [content]
+
+            valid_paths = [
+                os.path.abspath(str(path))
+                for path in paths
+                if isinstance(path, str) and os.path.exists(path)
+            ]
+
+            if len(paths) == 1:
+                display_text = os.path.basename(str(paths[0]))
                 icon = "📄"
+            else:
+                filenames = [
+                    os.path.basename(str(path))
+                    for path in paths[:3]
+                ]
+
+                display_text = ", ".join(filenames)
+
+                if len(paths) > 3:
+                    display_text += f" ... (+{len(paths) - 3})"
+
+                icon = "📁"
+
         else:
-            display_text = content[:50] + "..." if len(content) > 50 else content
-            display_text = display_text.replace('\n', ' ')
+
+            valid_paths = []
+
+            display_text = str(content).replace("\n", " ")
+
+            if len(display_text) > 50:
+                display_text = display_text[:50] + "..."
+
             icon = "📝"
 
-        icon_label = ctk.CTkLabel(item_frame, text=icon, width=30, font=ctk.CTkFont(size=16))
+        # --------------------------------------------------------------
+        # Icon
+        # --------------------------------------------------------------
+
+        icon_label = ctk.CTkLabel(
+            item_frame,
+            text=icon,
+            width=30,
+            font=ctk.CTkFont(size=16),
+            cursor="hand2"
+        )
         icon_label.pack(side="left", padx=2)
 
+        # --------------------------------------------------------------
+        # Item number
+        # --------------------------------------------------------------
+
         index_label = ctk.CTkLabel(
-            item_frame, text=f"#{index + 1}", width=40, font=ctk.CTkFont(size=14, weight="bold")
+            item_frame,
+            text=f"#{index + 1}",
+            width=40,
+            font=ctk.CTkFont(size=14, weight="bold")
         )
         index_label.pack(side="left", padx=5)
 
+        # --------------------------------------------------------------
+        # Timestamp
+        # --------------------------------------------------------------
+
         time_text = ""
+
         if index < len(self.clipboard_timestamps):
-            time_text = self.format_relative_time(self.clipboard_timestamps[index])
+            time_text = self.format_relative_time(
+                self.clipboard_timestamps[index]
+            )
+
         time_label = ctk.CTkLabel(
-            item_frame, text=time_text, width=50, font=ctk.CTkFont(size=10), text_color="gray"
+            item_frame,
+            text=time_text,
+            width=50,
+            font=ctk.CTkFont(size=10),
+            text_color="gray"
         )
         time_label.pack(side="left", padx=2)
 
-        content_label = ctk.CTkLabel(item_frame, text=display_text, anchor="w", cursor="hand2")
-        content_label.pack(side="left", fill="x", expand=True, padx=5)
-        content_label.bind("<Button-1>", lambda e, i=index: self.toggle_checkbox_from_label(i))
-        icon_label.bind("<Button-1>", lambda e, i=index: self.toggle_checkbox_from_label(i))
+        # --------------------------------------------------------------
+        # Main filename / text label
+        # --------------------------------------------------------------
 
+        content_label = ctk.CTkLabel(
+            item_frame,
+            text=display_text,
+            anchor="w",
+            cursor="hand2"
+        )
+        content_label.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=5
+        )
+
+        # --------------------------------------------------------------
+        # Normal click = selection
+        # --------------------------------------------------------------
+
+        # --------------------------------------------------------------
+        # Press/release on the row: press shows a drag preview (if this
+        # item is draggable) without selecting yet; release decides
+        # click-vs-drag and only then toggles the checkbox. See
+        # _on_item_press / _on_item_release for why this split exists.
+        # --------------------------------------------------------------
+
+        drag_paths = valid_paths if (item_type == 'file' and valid_paths) else None
+        is_text_drag = (item_type == 'text')
+        press_payload = drag_paths if drag_paths is not None else (
+            [str(content)[:60]] if is_text_drag else None
+        )
+
+        for w in (content_label, icon_label):
+            w.bind(
+                "<ButtonPress-1>",
+                lambda event, i=index, dp=press_payload, txt=is_text_drag:
+                    self._on_item_press(event, i, drag_paths=dp, is_text=txt),
+                add="+"
+            )
+            w.bind(
+                "<ButtonRelease-1>",
+                lambda event, i=index:
+                    self._on_item_release(event, i),
+                add="+"
+            )
+
+        # --------------------------------------------------------------
+        # NATIVE DRAG AND DROP
+        # IMPORTANT: widgets now exist before binding them
+        # --------------------------------------------------------------
+
+        if item_type == 'file' and valid_paths:
+
+            # Drag using filename, icon, or item number.
+            self._bind_file_drag_source(
+                content_label,
+                valid_paths
+            )
+
+            self._bind_file_drag_source(
+                icon_label,
+                valid_paths
+            )
+
+            self._bind_file_drag_source(
+                index_label,
+                valid_paths
+            )
+
+        elif item_type == 'text':
+
+            self._bind_text_drag_source(
+                content_label,
+                str(content)
+            )
+
+            self._bind_text_drag_source(
+                icon_label,
+                str(content)
+            )
+
+        # --------------------------------------------------------------
         # Delete button
+        # --------------------------------------------------------------
+
         delete_button = ctk.CTkButton(
-            item_frame, text="×", width=30, height=30, font=ctk.CTkFont(size=14),
-            fg_color="red", hover_color="darkred",
-            command=lambda i=index: self.delete_item(i)
+            item_frame,
+            text="×",
+            width=30,
+            height=30,
+            font=ctk.CTkFont(size=14),
+            fg_color="red",
+            hover_color="darkred",
+            command=lambda i=index:
+                self.delete_item(i)
         )
         delete_button.pack(side="right", padx=2)
 
+        # --------------------------------------------------------------
         # Copy button
+        # --------------------------------------------------------------
+
         copy_button = ctk.CTkButton(
-            item_frame, text="Copy", width=60, height=30, font=ctk.CTkFont(size=12),
-            command=lambda i=index: self.copy_item_to_clipboard(i)
+            item_frame,
+            text="Copy",
+            width=60,
+            height=30,
+            font=ctk.CTkFont(size=12),
+            command=lambda i=index:
+                self.copy_item_to_clipboard(i)
         )
         copy_button.pack(side="right", padx=5)
 
+        # --------------------------------------------------------------
         # Pin button
+        # --------------------------------------------------------------
+
         pin_icon = "📌" if is_pinned else "📍"
+
         pin_button = ctk.CTkButton(
-            item_frame, text=pin_icon, width=30, height=30, font=ctk.CTkFont(size=13),
-            fg_color="transparent", hover_color=("gray75", "gray25"),
-            command=lambda i=index: self.toggle_pin(i)
+            item_frame,
+            text=pin_icon,
+            width=30,
+            height=30,
+            font=ctk.CTkFont(size=13),
+            fg_color="transparent",
+            hover_color=("gray75", "gray25"),
+            command=lambda i=index:
+                self.toggle_pin(i)
         )
         pin_button.pack(side="right", padx=2)
 
@@ -646,6 +1111,41 @@ class ClipboardManager:
             else:
                 self.checkboxes[index].deselect()
             self.on_checkbox_toggle(index, var)
+
+    def _on_item_press(self, event, index, drag_paths=None, is_text=False):
+        """Mouse-down on a row's icon/name. Records where the press started
+        and shows a drag preview, but does NOT select the item yet —
+        selection only happens on release, and only if the press turns out
+        to have been a click rather than a drag (see _on_item_release).
+        This is what stops every drag-out from also flipping the checkbox."""
+        self._press_start = (event.x_root, event.y_root)
+        self._drag_started = False
+
+        if drag_paths is not None:
+            self.show_drag_visual(drag_paths, event, is_text=is_text)
+            # Safety net: if this turns into a real native OS drag, the
+            # modal drag loop can swallow our own ButtonRelease-1, which
+            # would otherwise leave this visual stuck on screen forever.
+            self.schedule_drag_visual_hide(4000)
+
+    def _on_item_release(self, event, index):
+        """Mouse-up on a row. Only toggles selection if the press-release
+        pair was a genuine click — i.e. no native drag actually started,
+        and the pointer didn't move past the click threshold in between."""
+        self.schedule_drag_visual_hide(300)
+
+        moved_far = False
+        if self._press_start is not None:
+            dx = event.x_root - self._press_start[0]
+            dy = event.y_root - self._press_start[1]
+            moved_far = (dx * dx + dy * dy) > (self.CLICK_MOVE_THRESHOLD ** 2)
+
+        was_drag = self._drag_started or moved_far
+        self._press_start = None
+        self._drag_started = False
+
+        if not was_drag:
+            self.toggle_checkbox_from_label(index)
 
     def toggle_pin(self, index):
         """Pin/unpin an item — pinned items are protected from eviction"""
@@ -715,14 +1215,11 @@ class ClipboardManager:
         system = platform.system()
         file_list = files if isinstance(files, list) else [files]
         try:
-            import subprocess
             if system == "Windows":
-                path_args = ','.join(f'"{f}"' for f in file_list)
-                subprocess.run(
-                    ['powershell', '-Command', f"Set-Clipboard -Path {path_args}"],
-                    timeout=2, check=True
-                )
+                if not self._copy_files_to_clipboard_windows(file_list):
+                    raise FileNotFoundError("native Windows clipboard write unavailable")
             elif system == "Darwin":
+                import subprocess
                 if len(file_list) == 1:
                     ascript = f'set the clipboard to (POSIX file "{file_list[0]}")'
                 else:
@@ -730,6 +1227,7 @@ class ClipboardManager:
                     ascript = f'set the clipboard to {{{posix_list}}}'
                 subprocess.run(['osascript', '-e', ascript], timeout=2, check=True)
             elif system == "Linux":
+                import subprocess
                 uri_list = "\n".join(Path(f).resolve().as_uri() for f in file_list)
                 subprocess.run(
                     ['xclip', '-selection', 'clipboard', '-t', 'text/uri-list'],
@@ -1102,6 +1600,38 @@ class ClipboardManager:
         self.copy_item_to_clipboard(index)
         message = random.choice(self.ROULETTE_MESSAGES).format(n=index + 1)
         self.show_toast(message, "purple")
+
+    def open_quick_guide_dialog(self):
+        """Show a brief how-to-use popup"""
+        dialog = ctk.CTkToplevel(self.window)
+        dialog.title("Quick Guide")
+        dialog.geometry("380x400")
+        dialog.transient(self.window)
+        dialog.grab_set()
+        if self.topmost_var.get():
+            dialog.attributes('-topmost', True)
+
+        title = ctk.CTkLabel(
+            dialog, text="❔ Quick Guide", font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title.pack(pady=(15, 10))
+
+        guide_text = (
+            "• Copy text or files (Ctrl+C) — they're captured automatically\n\n"
+            "• Multi-Select mode: check several items, then hit\n"
+            "  \"Copy Selected\" to combine them onto the clipboard\n\n"
+            "• Single-Select mode: checking an item copies it immediately\n\n"
+            "• 📌 Pin an item to protect it from being evicted once you\n"
+            f"  hit the {self.max_items}-item limit\n\n"
+            "• Ctrl+F focuses search, Escape clears it"
+        )
+        label = ctk.CTkLabel(
+            dialog, text=guide_text, font=ctk.CTkFont(size=12), justify="left"
+        )
+        label.pack(pady=10, padx=20)
+
+        close_button = ctk.CTkButton(dialog, text="Got it", command=dialog.destroy)
+        close_button.pack(pady=10)
 
     def open_stats_dialog(self):
         """Show lifetime clipboard stats, with a silly novel/tweet comparison"""
