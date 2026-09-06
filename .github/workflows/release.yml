@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        shell: bash
+        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Sync version into source files
+        shell: bash
+        run: |
+          sed -i "s/__version__ = \".*\"/__version__ = \"${APP_VERSION}\"/" version.py
+          sed -i "s/#define MyAppVersion \".*\"/#define MyAppVersion \"${APP_VERSION}\"/" installer.iss
+
+      - name: Build executable (PyInstaller)
+        run: pyinstaller ClipboardManagerPro.spec
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Build installer
+        shell: cmd
+        run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/ClipboardManagerPro.exe
+            installer_output/ClipboardManagerPro-Setup-${{ env.APP_VERSION }}.exe
