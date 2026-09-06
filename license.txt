@@ -1,0 +1,141 @@
+CLIPBOARD MANAGER PRO
+SOFTWARE LICENSE AGREEMENT
+
+Copyright © 2026 Room 010 Solutions. All rights reserved.
+
+IMPORTANT — PLEASE READ
+
+This Software License Agreement ("Agreement") is a legal agreement between you ("User") and Room 010 Solutions ("Licensor") governing your use of Clipboard Manager Pro ("Software").
+
+BY INSTALLING, COPYING, ACCESSING, OR USING THE SOFTWARE, YOU ACKNOWLEDGE THAT YOU HAVE READ, UNDERSTOOD, AND AGREE TO BE BOUND BY THE TERMS OF THIS AGREEMENT.
+
+IF YOU DO NOT AGREE TO THESE TERMS, DO NOT INSTALL, COPY, ACCESS, OR USE THE SOFTWARE.
+
+1. OWNERSHIP
+
+Clipboard Manager Pro, including its executable files, source code, object code, user interface, graphics, documentation, features, design, and associated materials, is owned by and remains the exclusive property of Room 010 Solutions.
+
+The Software is licensed, not sold.
+
+No ownership rights or intellectual property rights are transferred to the User under this Agreement.
+
+2. LICENSE GRANT
+
+Subject to your acceptance of this Agreement, Room 010 Solutions grants you a limited, non-exclusive, non-transferable, and revocable license to install and use Clipboard Manager Pro for its intended purpose.
+
+This license does not grant you ownership of the Software or any intellectual property associated with it.
+
+3. PERMITTED USE
+
+You may:
+
+• Install the Software on computers that you are authorized to use.
+• Use the Software for its intended functionality.
+• Make a reasonable backup copy of the Software solely for personal or organizational backup purposes, provided that all copyright and proprietary notices remain intact.
+
+4. RESTRICTIONS
+
+Unless expressly authorized in writing by Room 010 Solutions, you may not:
+
+• Sell, resell, rent, lease, sublicense, or commercially redistribute the Software.
+• Give, transfer, or distribute copies of the Software to third parties.
+• Modify, adapt, translate, or create derivative works based on the Software.
+• Reverse engineer, decompile, disassemble, or otherwise attempt to derive the source code of the Software, except to the extent that such activity cannot legally be restricted.
+• Remove, alter, or obscure copyright, trademark, licensing, or proprietary notices.
+• Circumvent, disable, bypass, or tamper with licensing, activation, security, or protection mechanisms included in the Software.
+• Use the Software to develop or distribute an unauthorized competing product.
+• Upload, publish, mirror, or distribute the Software through unauthorized websites, file-sharing services, repositories, or other distribution channels.
+• Claim ownership of the Software or any portion of its intellectual property.
+
+5. COPYRIGHT AND INTELLECTUAL PROPERTY
+
+All rights, title, and interest in and to Clipboard Manager Pro, including all intellectual property rights, remain with Room 010 Solutions.
+
+Copyright:
+
+Copyright © 2026 Room 010 Solutions. All rights reserved.
+
+All trademarks, product names, logos, graphics, and other proprietary materials associated with Clipboard Manager Pro remain the property of their respective owners where applicable.
+
+6. THIRD-PARTY COMPONENTS
+
+The Software may contain or depend upon third-party libraries, frameworks, or components that are distributed under their respective licenses.
+
+Such third-party components remain subject to their applicable license terms. Nothing in this Agreement is intended to override the rights granted by those third-party licenses.
+
+7. UPDATES AND CHANGES
+
+Room 010 Solutions may, at its discretion, release updates, upgrades, patches, bug fixes, or new versions of the Software.
+
+Updates may modify, add, or remove features and functionality.
+
+Room 010 Solutions is not obligated to provide updates or continued support unless otherwise agreed in writing.
+
+8. TERMINATION
+
+This license is effective until terminated.
+
+Room 010 Solutions may terminate this license if you materially violate any provision of this Agreement.
+
+Upon termination, you must immediately stop using the Software and, where applicable, delete all copies of the Software in your possession or control.
+
+Termination does not limit any other rights or remedies available to Room 010 Solutions under applicable law.
+
+9. DISCLAIMER OF WARRANTIES
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED.
+
+ROOM 010 SOLUTIONS DISCLAIMS ALL WARRANTIES, INCLUDING, WITHOUT LIMITATION, WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, RELIABILITY, AND AVAILABILITY.
+
+ROOM 010 SOLUTIONS DOES NOT WARRANT THAT THE SOFTWARE WILL BE ERROR-FREE, UNINTERRUPTED, SECURE, OR COMPATIBLE WITH EVERY COMPUTER, OPERATING SYSTEM, OR CONFIGURATION.
+
+10. LIMITATION OF LIABILITY
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, ROOM 010 SOLUTIONS SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES ARISING FROM OR RELATED TO THE USE OF, OR INABILITY TO USE, THE SOFTWARE.
+
+THE USER IS RESPONSIBLE FOR MAINTAINING APPROPRIATE BACKUPS OF ANY DATA USED WITH THE SOFTWARE.
+
+11. USER RESPONSIBILITY
+
+You are responsible for ensuring that your use of Clipboard Manager Pro complies with all applicable laws, regulations, and organizational policies.
+
+You are also responsible for the security and protection of any data processed, stored, or accessed through the Software.
+
+12. PRIVACY
+
+Where Clipboard Manager Pro processes personal or sensitive information, the User is responsible for using the Software in compliance with applicable privacy and data-protection laws.
+
+Any separate privacy policy issued by Room 010 Solutions may apply where applicable.
+
+13. ACCEPTANCE
+
+By selecting "I Accept," installing, copying, accessing, or using Clipboard Manager Pro, you confirm that:
+
+• You have read this Agreement.
+• You understand its terms.
+• You agree to be legally bound by its terms.
+• You accept the license restrictions described above.
+
+If you select "I Reject," you must not install or use the Software.
+
+14. GOVERNING LAW
+
+This Agreement shall be interpreted and enforced in accordance with the applicable laws and jurisdiction agreed upon by Room 010 Solutions, subject to any mandatory legal rights applicable to the User.
+
+15. ENTIRE AGREEMENT
+
+This Agreement constitutes the complete agreement between the User and Room 010 Solutions concerning the licensing of Clipboard Manager Pro and supersedes any prior or contemporaneous agreements concerning the same subject matter.
+
+If any provision of this Agreement is found to be unenforceable, the remaining provisions shall remain in full force and effect.
+
+16. CONTACT
+
+For licensing, permissions, support, or other inquiries concerning Clipboard Manager Pro, please contact:
+
+Room 010 Solutions
+
+Clipboard Manager Pro
+
+Copyright © 2026 Room 010 Solutions. All rights reserved.
+
+END OF LICENSE AGREEMENT
