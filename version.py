@@ -1,3 +1,3 @@
 # Single source of truth for the app's version. Bump this before every
 # release, keep it in sync with the git tag and the .iss AppVersion.
-__version__ = "1.3.010"
+__version__ = "1.4.010"

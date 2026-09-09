@@ -108,6 +108,15 @@ class ClipboardManager:
         self.create_widgets()
         self.update_display()
 
+        # Snapshot whatever's currently on the OS clipboard as the known
+        # baseline, using the live clipboard rather than a guess from the
+        # last saved history item. Guessing from history is what caused the
+        # restart-duplication bug: if the last saved item was a file
+        # selection, the old code fell back to last_clipboard_content = "",
+        # so the very next poll saw the still-present file selection as
+        # "new" and re-added it one slot after the last item, every launch.
+        self.last_clipboard_content = self._read_current_clipboard_state()
+
         # Start clipboard monitoring
         self.monitoring = True
         self.monitor_thread = threading.Thread(
@@ -559,9 +568,26 @@ class ClipboardManager:
             self.stats = data.get("stats", self.stats)
             if self.clipboard_history:
                 last = self.clipboard_history[-1]
+                # CRITICAL FIX: Set last_clipboard_content to the actual last item
+                # but also mark that we've just loaded history so the monitor doesn't
+                # immediately re-detect it
                 self.last_clipboard_content = last if isinstance(last, str) else ""
+                # Set a suppression flag to prevent immediate re-detection on startup
+                self._suppress_monitor_until = time.time() + 2.0
         except Exception:
             pass  # Corrupt or unreadable history file — start fresh rather than crash
+
+    def _read_current_clipboard_state(self):
+        """Return whatever's currently on the OS clipboard, in the same shape
+        monitor_clipboard() compares against last_clipboard_content — a list
+        of file paths if files are present, otherwise the clipboard text."""
+        file_paths = self.get_clipboard_files()
+        if file_paths:
+            return file_paths
+        try:
+            return pyperclip.paste()
+        except Exception:
+            return ""
 
     def save_history(self):
         try:
@@ -631,8 +657,7 @@ class ClipboardManager:
         """Monitor clipboard for changes in background thread"""
         while self.monitoring:
             if time.time() < self._suppress_monitor_until:
-                # We just wrote to the clipboard ourselves (via a Copy action) —
-                # skip this poll entirely so we don't re-detect our own write as new
+                # Skip monitoring during suppression period
                 time.sleep(0.2)
                 continue
             try:
@@ -640,9 +665,20 @@ class ClipboardManager:
                 file_paths = self.get_clipboard_files()
 
                 if file_paths:
+                    # FIX: Check if these files are already in history before adding
                     if file_paths != self.last_clipboard_content:
-                        self.last_clipboard_content = file_paths
-                        self.window.after(0, lambda fp=file_paths: self.add_new_item(fp, 'file'))
+                        # Also check if these exact files already exist in history
+                        already_exists = False
+                        for item in self.clipboard_history:
+                            if isinstance(item, list) and item == file_paths:
+                                already_exists = True
+                                break
+                            elif isinstance(item, str) and [item] == file_paths:
+                                already_exists = True
+                                break
+                        if not already_exists:
+                            self.last_clipboard_content = file_paths
+                            self.window.after(0, lambda fp=file_paths: self.add_new_item(fp, 'file'))
                 elif current_content != self.last_clipboard_content and current_content.strip():
                     self.last_clipboard_content = current_content
                     if current_content not in self.clipboard_history:
