@@ -29,17 +29,11 @@ import requests
 
 from version import __version__ as CURRENT_VERSION
 
-# ---------------------------------------------------------------------
-# Configuration — set these to your actual GitHub username/repo
-# ---------------------------------------------------------------------
-GITHUB_OWNER = "your-github-username"
-GITHUB_REPO = "clipboard-manager-pro"
-
 # Substring used to find the installer asset among a release's files.
 # Matches the OutputBaseFilename pattern in installer.iss below.
 INSTALLER_ASSET_HINT = "Setup"
 
-API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+API_URL = f"https://github.com/room010solutions/copy_paste_enhancer-source/releases/latest"
 REQUEST_TIMEOUT = 6
 
 
@@ -120,7 +114,7 @@ def _on_release_fetched(window, release, silent):
                 "Check for Updates",
                 f"A new version ({latest_tag}) is available, but no installer\n"
                 "asset was found on the release. Download it manually from:\n"
-                f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
+                f"https://github.com/room010solutions/copy_paste_enhancer-source/releases"
             )
         return
 
@@ -146,7 +140,7 @@ def _download_and_install(window, asset):
                 "Update Failed",
                 f"Couldn't download the update:\n{e}\n\n"
                 f"You can download it manually from:\n"
-                f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
+                f"https://github.com/room010solutions/copy_paste_enhancer-source/releases/latest"
             ))
             return
         window.after(0, lambda: _launch_installer(installer_path))

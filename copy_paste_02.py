@@ -12,11 +12,192 @@ from PIL import Image, ImageTk
 from pathlib import Path
 from tkinterdnd2 import TkinterDnD, DND_FILES, DND_TEXT, COPY
 
+# --------------------------------------------------------------------------
+# Native Windows OLE drag-and-drop.
+#
+# tkinterdnd2's outbound drag (drag_source_register + <<DragInitCmd>>) fires
+# fine, but its bundled tkdnd build frequently fails to actually hand the
+# drag off to the OS when the drop target is a native (non-Tk) app such as
+# Explorer or Outlook — the app-side visual shows, nothing lands. This talks
+# directly to the same COM drag-drop machinery Explorer itself uses, so it
+# works against any real OLE drop target. Only available on Windows with
+# pywin32 installed; other platforms/setups fall back to tkinterdnd2.
+# --------------------------------------------------------------------------
+try:
+    import pythoncom
+    import win32con
+    import winerror
+    from win32com.server.util import wrap as _com_wrap
+    _NATIVE_DND_AVAILABLE = (platform.system() == "Windows")
+except ImportError:
+    _NATIVE_DND_AVAILABLE = False
+
+
+if _NATIVE_DND_AVAILABLE:
+
+    # DROPEFFECT_* aren't reliably exposed as named attributes across
+    # pywin32 builds (neither pythoncom nor win32con had them here) — these
+    # are fixed DWORD values from oleidl.h, safe to hardcode directly.
+    _DROPEFFECT_NONE = 0
+    _DROPEFFECT_COPY = 1
+    _DROPEFFECT_MOVE = 2
+    _DROPEFFECT_LINK = 4
+
+    class _NativeDropSource:
+        """Minimal IDropSource — decides when the drag ends and what cursor
+        to show. Required by DoDragDrop even though we want default behavior.
+        Note: S_OK/DRAGDROP_S_* are NOT attributes of pythoncom in current
+        pywin32 (verified against the pywin32 stubs) — they live in winerror."""
+
+        _public_methods_ = ['QueryContinueDrag', 'GiveFeedback']
+        _com_interfaces_ = [pythoncom.IID_IDropSource]
+
+        def QueryContinueDrag(self, fEscapePressed, grfKeyState):
+            if fEscapePressed:
+                return winerror.DRAGDROP_S_CANCEL
+            if not (grfKeyState & (win32con.MK_LBUTTON | win32con.MK_RBUTTON)):
+                return winerror.DRAGDROP_S_DROP
+            return winerror.S_OK
+
+        def GiveFeedback(self, dwEffect):
+            return winerror.DRAGDROP_S_USEDEFAULTCURSORS
+
+    class _FormatEtcEnumerator:
+        """Minimal IEnumFORMATETC. pythoncom has no WrapEnumFormatEtc helper
+        (also verified absent from the stubs) — EnumFormatEtc needs a real,
+        if tiny, enumerator object instead of a one-line wrapper call."""
+
+        _public_methods_ = ['Next', 'Skip', 'Reset', 'Clone']
+        _com_interfaces_ = [pythoncom.IID_IEnumFORMATETC]
+
+        def __init__(self, formats):
+            self._formats = list(formats)
+            self._index = 0
+
+        def Next(self, count):
+            chunk = self._formats[self._index:self._index + count]
+            self._index += len(chunk)
+            return chunk
+
+        def Skip(self, count):
+            self._index = min(self._index + count, len(self._formats))
+            return winerror.S_OK if self._index < len(self._formats) else winerror.S_FALSE
+
+        def Reset(self):
+            self._index = 0
+            return winerror.S_OK
+
+        def Clone(self):
+            clone = _FormatEtcEnumerator(self._formats)
+            clone._index = self._index
+            return _com_wrap(clone, pythoncom.IID_IEnumFORMATETC)
+
+    class _NativeFileDataObject:
+        """Minimal IDataObject exposing CF_HDROP (files) and/or
+        CF_UNICODETEXT (text) via a single HGLOBAL medium — the same
+        DROPFILES-struct trick already used for clipboard file copies,
+        just handed to DoDragDrop instead of the clipboard."""
+
+        _public_methods_ = [
+            'GetData', 'GetDataHere', 'QueryGetData', 'GetCanonicalFormatEtc',
+            'SetData', 'EnumFormatEtc', 'DAdvise', 'DUnadvise', 'EnumDAdvise',
+        ]
+        _com_interfaces_ = [pythoncom.IID_IDataObject]
+
+        def __init__(self, file_paths=None, text=None):
+            self._file_paths = list(file_paths) if file_paths else None
+            self._text = text
+
+        def _formats(self):
+            if self._file_paths:
+                yield (win32con.CF_HDROP, None, pythoncom.DVASPECT_CONTENT,
+                       -1, pythoncom.TYMED_HGLOBAL)
+            if self._text is not None:
+                yield (win32con.CF_UNICODETEXT, None, pythoncom.DVASPECT_CONTENT,
+                       -1, pythoncom.TYMED_HGLOBAL)
+                # Legacy ANSI text. Some native apps (Word among them) query
+                # this before/instead of CF_UNICODETEXT and refuse the whole
+                # drop on the first DV_E_FORMATETC rather than trying the
+                # next format — unlike Chromium, which falls back gracefully.
+                yield (win32con.CF_TEXT, None, pythoncom.DVASPECT_CONTENT,
+                       -1, pythoncom.TYMED_HGLOBAL)
+
+        def _hdrop_bytes(self):
+            names = "\0".join(os.path.abspath(p) for p in self._file_paths) + "\0\0"
+            block = names.encode("utf-16-le")
+            header = struct.pack('Iiiii', struct.calcsize('Iiiii'), 0, 0, 0, 1)
+            return header + block
+
+        def _unicode_text_bytes(self):
+            return (self._text + "\0").encode("utf-16-le")
+
+        def _ansi_text_bytes(self):
+            # Best-effort downgrade to the system codepage; characters
+            # outside it become '?' rather than raising, since a lossy
+            # CF_TEXT is still better than no fallback at all.
+            return (self._text + "\0").encode("mbcs", errors="replace")
+
+        def GetData(self, formatetc):
+            cf, _ptd, _aspect, _index, tymed = formatetc
+            if cf == win32con.CF_HDROP and self._file_paths and (tymed & pythoncom.TYMED_HGLOBAL):
+                payload = self._hdrop_bytes()
+            elif cf == win32con.CF_UNICODETEXT and self._text is not None and (tymed & pythoncom.TYMED_HGLOBAL):
+                payload = self._unicode_text_bytes()
+            elif cf == win32con.CF_TEXT and self._text is not None and (tymed & pythoncom.TYMED_HGLOBAL):
+                payload = self._ansi_text_bytes()
+            else:
+                # Diagnostic: which format/tymed combo did the drop target
+                # actually insist on that we don't support? cf is a numeric
+                # clipboard format id — 15 is CF_HDROP, 13 is CF_UNICODETEXT,
+                # anything else (often >0xC000) is a registered shell format
+                # like "Preferred DropEffect" or "Shell IDList Array".
+                print(f"GetData: unsupported format cf={cf} tymed={tymed}")
+                raise pythoncom.com_error(winerror.DV_E_FORMATETC)
+            medium = pythoncom.STGMEDIUM()
+            medium.set(pythoncom.TYMED_HGLOBAL, payload)
+            return medium
+
+        def GetDataHere(self, formatetc, medium):
+            raise pythoncom.com_error(winerror.E_NOTIMPL)
+
+        def QueryGetData(self, formatetc):
+            cf, _ptd, _aspect, _index, tymed = formatetc
+            for fmt in self._formats():
+                if fmt[0] == cf and (tymed & pythoncom.TYMED_HGLOBAL):
+                    return 0
+            return winerror.DV_E_FORMATETC
+
+        def GetCanonicalFormatEtc(self, formatetc):
+            raise pythoncom.com_error(winerror.E_NOTIMPL)
+
+        def SetData(self, formatetc, medium, release):
+            cf = formatetc[0]
+            print(f"SetData: target tried to set format cf={cf} (ignored)")
+            raise pythoncom.com_error(winerror.E_NOTIMPL)
+
+        def EnumFormatEtc(self, direction):
+            if direction != pythoncom.DATADIR_GET:
+                raise pythoncom.com_error(winerror.E_NOTIMPL)
+            return _com_wrap(
+                _FormatEtcEnumerator(self._formats()),
+                pythoncom.IID_IEnumFORMATETC
+            )
+
+        def DAdvise(self, formatetc, flags, sink):
+            raise pythoncom.com_error(winerror.OLE_E_ADVISENOTSUPPORTED)
+
+        def DUnadvise(self, connection):
+            raise pythoncom.com_error(winerror.OLE_E_ADVISENOTSUPPORTED)
+
+        def EnumDAdvise(self):
+            raise pythoncom.com_error(winerror.OLE_E_ADVISENOTSUPPORTED)
+
 
 class DnDCTk(TkinterDnD.DnDWrapper, ctk.CTk):
     """customtkinter's CTk doesn't inherit from TkinterDnD's Tk, so drag-and-drop
     is bolted on via this mixin — the standard pattern for combining
-    customtkinter with tkinterdnd2."""
+    customtkinter with tkinterdnd2. Still used for the (rare) non-Windows /
+    no-pywin32 fallback path."""
 
     def __init__(self, *args, **kwargs):
         ctk.CTk.__init__(self, *args, **kwargs)
@@ -72,6 +253,11 @@ class ClipboardManager:
         # Selection mode (True = multiple, False = single)
         self.multiple_selection_mode = False
 
+        # Whether clipboard history is wiped on app close (True) or
+        # persisted for the next launch (False) — itself persisted, so
+        # the choice survives restarts
+        self.clear_on_close = False
+
         # Toast stacking
         # Toast stacking
         self.active_toasts = []
@@ -94,8 +280,13 @@ class ClipboardManager:
         # native drag (don't also toggle selection). Tracked per press since
         # only one press-drag sequence is ever in flight at a time.
         self._press_start = None       # (x_root, y_root) at ButtonPress
-        self._drag_started = False     # set True once <<DragInitCmd>> actually fires
+        self._drag_started = False     # set True once a real drag is confirmed
         self.CLICK_MOVE_THRESHOLD = 4  # pixels of movement before it counts as a drag
+
+        # Payload for whichever row is currently pressed, consumed by
+        # _on_item_motion once the pointer crosses CLICK_MOVE_THRESHOLD.
+        self._pending_drag_paths = None
+        self._pending_drag_text = None
 
         # Timestamp until which the monitor thread ignores clipboard changes —
         # prevents our own programmatic copies from being re-detected as new items
@@ -265,7 +456,11 @@ class ClipboardManager:
         )
 
     def _bind_file_drag_source(self, widget, file_paths):
-        """Register a widget as a native Windows file drag source."""
+        """Register a widget as a drag source for the given files. On
+        Windows with pywin32 available this arms the native OLE path
+        (see _start_native_drag); the payload itself is stashed on
+        ButtonPress by _on_item_press and consumed by _on_item_motion —
+        this method only needs to exist for the tkdnd fallback branch."""
 
         paths = (
             list(file_paths)
@@ -282,46 +477,33 @@ class ClipboardManager:
         if not valid_paths:
             return
 
+        if _NATIVE_DND_AVAILABLE:
+            return  # handled by _on_item_motion via native OLE drag
+
         try:
             widget.drag_source_register(1, DND_FILES)
 
             def drag_init(event, paths=valid_paths):
-
-                # A real drag is underway — the pending click-release
-                # handler must not also toggle this item's checkbox.
                 self._drag_started = True
-
-                # Refresh the visual in case the press-time one already faded
                 self.show_drag_visual(paths, event)
+                data = self.window.tk.call("list", *paths)
+                return (COPY, DND_FILES, data)
 
-                # TkDND expects a Tcl-formatted list.
-                data = self.window.tk.call(
-                    "list",
-                    *paths
-                )
-
-                return (
-                    COPY,
-                    DND_FILES,
-                    data
-                )
-
-            widget.dnd_bind(
-                "<<DragInitCmd>>",
-                drag_init
-            )
+            widget.dnd_bind("<<DragInitCmd>>", drag_init)
 
         except Exception as e:
             print(f"File drag source setup failed: {e}")
 
     def _bind_text_drag_source(self, widget, text):
-        """Bind a widget as a native TkDND text drag source. Mirrors
-        _bind_file_drag_source — click-vs-drag handling and the preview
-        visual live in _on_item_press/_on_item_release; this just wires the
-        drag payload."""
+        """Bind a widget as a text drag source. On Windows with pywin32
+        available this arms the native OLE path (see _start_native_drag);
+        otherwise falls back to tkdnd's <<DragInitCmd>>."""
 
         if not text:
             return
+
+        if _NATIVE_DND_AVAILABLE:
+            return  # handled by _on_item_motion via native OLE drag
 
         preview = text if len(text) <= 60 else text[:60] + "..."
 
@@ -329,20 +511,84 @@ class ClipboardManager:
             widget.drag_source_register(1, DND_TEXT)
 
             def drag_init(event, text=text, preview=preview):
-
                 self._drag_started = True
                 self.show_drag_visual([preview], event, is_text=True)
-
-                return (
-                    (COPY,),
-                    (DND_TEXT,),
-                    text
-                )
+                return ((COPY,), (DND_TEXT,), text)
 
             widget.dnd_bind("<<DragInitCmd>>", drag_init)
 
         except Exception as e:
             print(f"Could not bind text drag source: {e}")
+
+    def _start_native_drag(self, file_paths=None, text=None):
+        """Kick off a real Windows OLE drag-and-drop via pywin32. This is a
+        blocking, modal call — DoDragDrop runs its own message loop and
+        only returns once the drop (or cancel) completes, exactly like
+        Explorer's own drag does. Returns True if the native drag actually
+        ran (regardless of whether the user dropped or cancelled)."""
+
+        if not _NATIVE_DND_AVAILABLE:
+            return False
+
+        # A native "replace/skip" conflict dialog (or any other Explorer
+        # window) is an ordinary, non-topmost window. If this app is pinned
+        # always-on-top it renders ON TOP of that dialog for the entire
+        # blocking DoDragDrop call, making it unreachable. Drop topmost for
+        # the duration of the drag and restore whatever the user had it set
+        # to afterward, regardless of how the drag ends.
+        was_topmost = bool(self.topmost_var.get())
+        if was_topmost:
+            self.window.attributes('-topmost', False)
+
+        try:
+            pythoncom.CoInitialize()
+        except pythoncom.com_error:
+            pass  # already initialized on this thread — fine
+
+        try:
+            data_obj = _com_wrap(
+                _NativeFileDataObject(file_paths, text),
+                pythoncom.IID_IDataObject
+            )
+            drop_source = _com_wrap(
+                _NativeDropSource(),
+                pythoncom.IID_IDropSource
+            )
+            effect = _DROPEFFECT_COPY | _DROPEFFECT_MOVE
+            pythoncom.DoDragDrop(data_obj, drop_source, effect)
+            return True
+        except Exception as e:
+            print(f"Native drag failed: {e}")
+            return False
+        finally:
+            if was_topmost:
+                self.window.attributes('-topmost', True)
+
+    def _on_item_motion(self, event):
+        """<B1-Motion> on a row. Once the pointer crosses the click
+        threshold while a drag-able item is pressed, this fires the native
+        OLE drag exactly once per press. Guarded by self._drag_started so
+        repeated motion events (there are many) don't re-enter DoDragDrop."""
+
+        if self._drag_started or self._press_start is None:
+            return
+
+        if self._pending_drag_paths is None and self._pending_drag_text is None:
+            return
+
+        dx = event.x_root - self._press_start[0]
+        dy = event.y_root - self._press_start[1]
+        if (dx * dx + dy * dy) <= (self.CLICK_MOVE_THRESHOLD ** 2):
+            return
+
+        self._drag_started = True
+        self.hide_drag_visual()
+
+        paths, text = self._pending_drag_paths, self._pending_drag_text
+        self._pending_drag_paths = None
+        self._pending_drag_text = None
+
+        self._start_native_drag(file_paths=paths, text=text)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -386,6 +632,18 @@ class ClipboardManager:
             font=ctk.CTkFont(size=11)
         )
         self.mode_toggle.pack(side="left", padx=20)
+
+        # Clear-on-close toggle (middle) — when on, history is wiped on
+        # exit instead of persisted for the next launch
+        self.clear_on_close_var = ctk.BooleanVar(value=self.clear_on_close)
+        self.clear_on_close_toggle = ctk.CTkSwitch(
+            self.top_controls,
+            text="Clear on Close",
+            variable=self.clear_on_close_var,
+            command=self.toggle_clear_on_close,
+            font=ctk.CTkFont(size=11)
+        )
+        self.clear_on_close_toggle.pack(side="left", padx=20)
 
         # Copy files button (right side)
         self.copy_files_button = ctk.CTkButton(
@@ -438,8 +696,12 @@ class ClipboardManager:
         self.content_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         # Left frame for clipboard items
+        self.content_frame.grid_columnconfigure(0, weight=1, uniform="content_col")
+        self.content_frame.grid_columnconfigure(1, weight=1, uniform="content_col")
+        self.content_frame.grid_rowconfigure(0, weight=1)
+
         self.left_frame = ctk.CTkFrame(self.content_frame)
-        self.left_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        self.left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
 
         # Search bar
         self.search_frame = ctk.CTkFrame(self.left_frame, fg_color="transparent")
@@ -472,15 +734,14 @@ class ClipboardManager:
         # Scrollable frame for clipboard items
         self.scrollable_frame = ctk.CTkScrollableFrame(
             self.left_frame,
-            width=450,
+            width=350,
             height=380
         )
         self.scrollable_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
         # Right frame for preview
-        self.right_frame = ctk.CTkFrame(self.content_frame, width=300)
-        self.right_frame.pack(side="right", fill="both", padx=(5, 0))
-        self.right_frame.pack_propagate(False)
+        self.right_frame = ctk.CTkFrame(self.content_frame)
+        self.right_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
 
         # Preview title
         self.preview_title = ctk.CTkLabel(
@@ -493,7 +754,7 @@ class ClipboardManager:
         # Preview content area
         self.preview_frame = ctk.CTkScrollableFrame(
             self.right_frame,
-            width=280,
+            width=350,
             height=350
         )
         self.preview_frame.pack(fill="both", expand=True, padx=10, pady=5)
@@ -566,6 +827,7 @@ class ClipboardManager:
             self.clipboard_timestamps = data.get("timestamps", [""] * n)
             self.max_items = data.get("max_items", self.max_items)
             self.stats = data.get("stats", self.stats)
+            self.clear_on_close = data.get("clear_on_close", self.clear_on_close)
             if self.clipboard_history:
                 last = self.clipboard_history[-1]
                 # CRITICAL FIX: Set last_clipboard_content to the actual last item
@@ -598,6 +860,7 @@ class ClipboardManager:
                 "timestamps": self.clipboard_timestamps,
                 "max_items": self.max_items,
                 "stats": self.stats,
+                "clear_on_close": self.clear_on_close,
             }
             with open(self.history_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f)
@@ -605,6 +868,11 @@ class ClipboardManager:
             pass  # Saving is best-effort — never let it interrupt the user's workflow
 
     def on_close(self):
+        if self.clear_on_close:
+            self.clipboard_history.clear()
+            self.clipboard_items_type.clear()
+            self.clipboard_pinned.clear()
+            self.clipboard_timestamps.clear()
         self.save_history()
         self.stop_monitoring()
         self.window.destroy()
@@ -620,6 +888,15 @@ class ClipboardManager:
             self.show_toast("Window will stay on top", "green")
         else:
             self.show_toast("Topmost disabled", "gray")
+
+    def toggle_clear_on_close(self):
+        """Toggle whether clipboard history is wiped when the app closes"""
+        self.clear_on_close = self.clear_on_close_var.get()
+        self.save_history()
+        if self.clear_on_close:
+            self.show_toast("History will be cleared on close", "orange")
+        else:
+            self.show_toast("History will be kept on close", "gray")
 
     def toggle_selection_mode(self):
         """Toggle between single and multiple selection mode"""
@@ -1033,6 +1310,7 @@ class ClipboardManager:
 
         drag_paths = valid_paths if (item_type == 'file' and valid_paths) else None
         is_text_drag = (item_type == 'text')
+        drag_text = str(content) if is_text_drag else None
         press_payload = drag_paths if drag_paths is not None else (
             [str(content)[:60]] if is_text_drag else None
         )
@@ -1040,8 +1318,13 @@ class ClipboardManager:
         for w in (content_label, icon_label):
             w.bind(
                 "<ButtonPress-1>",
-                lambda event, i=index, dp=press_payload, txt=is_text_drag:
-                    self._on_item_press(event, i, drag_paths=dp, is_text=txt),
+                lambda event, i=index, dp=press_payload, txt=is_text_drag, full_text=drag_text:
+                    self._on_item_press(event, i, drag_paths=dp, is_text=txt, full_text=full_text),
+                add="+"
+            )
+            w.bind(
+                "<B1-Motion>",
+                self._on_item_motion,
                 add="+"
             )
             w.bind(
@@ -1148,14 +1431,18 @@ class ClipboardManager:
                 self.checkboxes[index].deselect()
             self.on_checkbox_toggle(index, var)
 
-    def _on_item_press(self, event, index, drag_paths=None, is_text=False):
+    def _on_item_press(self, event, index, drag_paths=None, is_text=False, full_text=None):
         """Mouse-down on a row's icon/name. Records where the press started
         and shows a drag preview, but does NOT select the item yet —
         selection only happens on release, and only if the press turns out
         to have been a click rather than a drag (see _on_item_release).
-        This is what stops every drag-out from also flipping the checkbox."""
+        This is what stops every drag-out from also flipping the checkbox.
+        Also stashes the real drag payload for _on_item_motion, which is
+        what actually fires the native OLE drag once the pointer moves."""
         self._press_start = (event.x_root, event.y_root)
         self._drag_started = False
+        self._pending_drag_paths = drag_paths if not is_text else None
+        self._pending_drag_text = full_text if is_text else None
 
         if drag_paths is not None:
             self.show_drag_visual(drag_paths, event, is_text=is_text)
@@ -1179,6 +1466,8 @@ class ClipboardManager:
         was_drag = self._drag_started or moved_far
         self._press_start = None
         self._drag_started = False
+        self._pending_drag_paths = None
+        self._pending_drag_text = None
 
         if not was_drag:
             self.toggle_checkbox_from_label(index)
