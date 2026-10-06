@@ -2033,7 +2033,7 @@ class ClipboardManager:
         if self.topmost_var.get():
             dialog.attributes('-topmost', True)
 
-        label = ctk.CTkLabel(dialog, text="Set maximum items (1-50):", font=ctk.CTkFont(size=14))
+        label = ctk.CTkLabel(dialog, text="Set maximum items (1-100):", font=ctk.CTkFont(size=14))
         label.pack(pady=10)
 
         entry = ctk.CTkEntry(dialog, width=100, placeholder_text=str(self.max_items))
@@ -2042,7 +2042,7 @@ class ClipboardManager:
         def set_max_items():
             try:
                 new_max = int(entry.get())
-                if 1 <= new_max <= 50:
+                if 1 <= new_max <= 100:
                     self.max_items = new_max
 
                     if len(self.clipboard_history) > new_max:
