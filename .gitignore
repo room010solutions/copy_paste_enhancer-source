@@ -1,0 +1,128 @@
+# ------------------------------------------------------------------
+# Python
+# ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# PyInstaller
+# The hand-written ClipboardManagerPro.spec IS tracked — do NOT ignore it.
+/build/
+/dist/
+*.manifest
+*.pyo
+# Auto-generated specs (keep the tracked one). If PyInstaller ever writes
+# a spec next to the tracked one under a different name, this catches it.
+# Comment out if you start trusting the generated spec instead.
+# *.spec
+
+# ------------------------------------------------------------------
+# Inno Setup / build output
+# ------------------------------------------------------------------
+installer_output/
+Output/
+*.iss.bak
+
+# ------------------------------------------------------------------
+# Test / coverage
+# ------------------------------------------------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypotheses/
+
+# ------------------------------------------------------------------
+# Packaging
+# ------------------------------------------------------------------
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+# Keep the .exe patterns — you may want to commit installers manually
+# in an emergency, but ignore the CI-produced ones inside dist/ and
+# installer_output/ (already covered above).
+!dist/.gitkeep
+
+# ------------------------------------------------------------------
+# Editors / IDEs
+# ------------------------------------------------------------------
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
+
+# ------------------------------------------------------------------
+# OS junk
+# ------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ------------------------------------------------------------------
+# App-specific local artifacts
+# ------------------------------------------------------------------
+# Local clipboard history dumps, crash logs, etc. if you ever write
+# any next to the source.
+.clipboard_manager_history.json
+*.log
+
+# ------------------------------------------------------------------
+# Secrets
+# ------------------------------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+secrets.json

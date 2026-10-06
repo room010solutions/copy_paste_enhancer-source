@@ -12,6 +12,14 @@ from PIL import Image, ImageTk
 from pathlib import Path
 from tkinterdnd2 import TkinterDnD, DND_FILES, DND_TEXT, COPY
 
+# Auto-updater is optional — if requests isn't installed or the module
+# is missing, the app still runs, it just can't check for updates.
+try:
+    import updater
+    _UPDATER_AVAILABLE = True
+except Exception as _e:
+    _UPDATER_AVAILABLE = False
+    
 # --------------------------------------------------------------------------
 # Native Windows OLE drag-and-drop.
 #
@@ -307,6 +315,16 @@ class ClipboardManager:
         # so the very next poll saw the still-present file selection as
         # "new" and re-added it one slot after the last item, every launch.
         self.last_clipboard_content = self._read_current_clipboard_state()
+
+        # Kick off a silent update check on a background thread. This is
+        # a no-op if updater.py or requests isn't available — see the
+        # try/except import at the top of the file. Silent mode only
+        # shows a dialog if an update is actually found.
+        if _UPDATER_AVAILABLE:
+            try:
+                updater.check_for_updates_async(self.window, silent=True)
+            except Exception as e:
+                print(f"Update check failed to start: {e}")
 
         # Start clipboard monitoring
         self.monitoring = True
@@ -666,6 +684,19 @@ class ClipboardManager:
             font=ctk.CTkFont(size=12)
         )
         self.guide_button.pack(side="right", padx=5)
+
+        # Check-for-updates button (right side) — manual trigger for the
+        # same updater that runs silently at startup. Always shows a
+        # result dialog, including "you're up to date" and network errors.
+        self.update_button = ctk.CTkButton(
+            self.top_controls,
+            text="⬆ Updates",
+            command=self.check_for_updates_manual,
+            width=90,
+            height=30,
+            font=ctk.CTkFont(size=12)
+        )
+        self.update_button.pack(side="right", padx=5)
 
         # Instructions
         self.instructions = ctk.CTkLabel(
@@ -1958,6 +1989,26 @@ class ClipboardManager:
         close_button = ctk.CTkButton(dialog, text="Got it", command=dialog.destroy)
         close_button.pack(pady=10)
 
+    # ------------------------------------------------------------------
+    # Updates
+    # ------------------------------------------------------------------
+
+    def check_for_updates_manual(self):
+        """Manual update check triggered by the Updates button. Always
+        shows a result, unlike the silent startup check."""
+        if not _UPDATER_AVAILABLE:
+            self.show_toast(
+                "Updater not available — install 'requests' (pip install requests)",
+                "orange"
+            )
+            return
+
+        self.show_toast("Checking for updates...", "blue")
+        try:
+            updater.check_for_updates_async(self.window, silent=False)
+        except Exception as e:
+            self.show_toast(f"Update check failed: {e}", "red")
+            
     def open_stats_dialog(self):
         """Show lifetime clipboard stats, with a silly novel/tweet comparison"""
         dialog = ctk.CTkToplevel(self.window)
