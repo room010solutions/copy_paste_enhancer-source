@@ -1,5 +1,5 @@
 #define MyAppName "Clipboard Manager Pro"
-#define MyAppVersion "1.7.010"
+#define MyAppVersion "2.0.010"
 #define MyAppPublisher "Room 010 Solutions"
 #define MyAppExeName "ClipboardManagerPro.exe"
 

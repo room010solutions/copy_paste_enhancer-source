@@ -9,8 +9,19 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  windows:
+    name: Windows ${{ matrix.arch }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            python: '3.11'
+            reqs: requirements.txt
+          - arch: x86
+            python: '3.8'
+            reqs: requirements-x86.txt
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,13 +33,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python }}
+          architecture: ${{ matrix.arch }}
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          pip install -r ${{ matrix.reqs }}
 
       - name: Sync version into source files
         shell: bash
@@ -40,16 +51,133 @@ jobs:
         run: pyinstaller ClipboardManagerPro.spec
 
       - name: Install Inno Setup
+        if: matrix.arch == 'x64'
         run: choco install innosetup -y
 
       - name: Build installer
+        if: matrix.arch == 'x64'
         shell: cmd
         run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
+
+      - name: Stage 64-bit outputs
+        if: matrix.arch == 'x64'
+        shell: bash
+        run: |
+          mkdir -p out
+          cp dist/ClipboardManagerPro.exe out/ClipboardManagerPro-win64.exe
+          cp installer_output/*.exe out/
+
+      - name: Stage 32-bit outputs
+        if: matrix.arch == 'x86'
+        shell: bash
+        run: |
+          mkdir -p out
+          cp dist/ClipboardManagerPro.exe out/ClipboardManagerPro-win32.exe
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: out/*
+          if-no-files-found: error
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ${{ matrix.arch == 'x86' && 'requirements-x86.txt' || 'requirements.txt' }}
+          pip install pyinstaller
+
+      - name: Sync version into source files
+        run: sed -i.bak "s/__version__ = \".*\"/__version__ = \"${APP_VERSION}\"/" version.py && rm -f version.py.bak
+
+      - name: Build app (PyInstaller)
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name ClipboardManagerPro \
+            --collect-all customtkinter --collect-all tkinterdnd2 --collect-all ffpyplayer \
+            copy_paste_02.py
+
+      - name: Package DMG
+        run: |
+          mkdir -p out
+          hdiutil create -volname ClipboardManagerPro -srcfolder dist/ClipboardManagerPro.app \
+            -ov -format UDZO out/ClipboardManagerPro-macos.dmg
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: out/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Derive version from tag
+        run: echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ${{ matrix.arch == 'x86' && 'requirements-x86.txt' || 'requirements.txt' }}
+          pip install pyinstaller
+
+      - name: Sync version into source files
+        run: sed -i.bak "s/__version__ = \".*\"/__version__ = \"${APP_VERSION}\"/" version.py && rm -f version.py.bak
+
+      - name: Build binary (PyInstaller)
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name ClipboardManagerPro \
+            --collect-all customtkinter --collect-all tkinterdnd2 --collect-all ffpyplayer \
+            copy_paste_02.py
+
+      - name: Package tarball
+        run: |
+          mkdir -p out
+          tar -czf out/ClipboardManagerPro-linux.tar.gz -C dist ClipboardManagerPro
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            dist/ClipboardManagerPro.exe
-            installer_output/ClipboardManagerPro-Setup-${{ env.APP_VERSION }}.exe
+          files: release/*
