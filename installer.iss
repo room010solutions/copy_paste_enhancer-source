@@ -1,7 +1,16 @@
 #define MyAppName "Clipboard Manager Pro"
-#define MyAppVersion "2.0.010"
+#define MyAppVersion "2.1.010"
 #define MyAppPublisher "Room 010 Solutions"
 #define MyAppExeName "ClipboardManagerPro.exe"
+
+#ifndef TargetArch
+  #define TargetArch "x64"
+#endif
+#if TargetArch == "x86"
+  #define ArchSuffix "-x86"
+#else
+  #define ArchSuffix ""
+#endif
 
 [Setup]
 ; Application GUID
@@ -16,9 +25,10 @@ DefaultGroupName={#MyAppName}
 
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
+ArchitecturesAllowed={#TargetArch}compatible
 
 OutputDir=installer_output
-OutputBaseFilename=ClipboardManagerPro-Setup-{#MyAppVersion}
+OutputBaseFilename=ClipboardManagerPro-Setup-{#MyAppVersion}{#ArchSuffix}
 
 Compression=lzma2
 SolidCompression=yes

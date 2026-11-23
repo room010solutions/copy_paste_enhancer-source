@@ -51,28 +51,22 @@ jobs:
         run: pyinstaller ClipboardManagerPro.spec
 
       - name: Install Inno Setup
-        if: matrix.arch == 'x64'
         run: choco install innosetup -y
 
       - name: Build installer
-        if: matrix.arch == 'x64'
         shell: cmd
-        run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss'
+        run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DTargetArch=${{ matrix.arch }} installer.iss'
 
-      - name: Stage 64-bit outputs
-        if: matrix.arch == 'x64'
+      - name: Stage outputs
         shell: bash
         run: |
           mkdir -p out
-          cp dist/ClipboardManagerPro.exe out/ClipboardManagerPro-win64.exe
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            cp dist/ClipboardManagerPro.exe out/ClipboardManagerPro-win64.exe
+          else
+            cp dist/ClipboardManagerPro.exe out/ClipboardManagerPro-win32.exe
+          fi
           cp installer_output/*.exe out/
-
-      - name: Stage 32-bit outputs
-        if: matrix.arch == 'x86'
-        shell: bash
-        run: |
-          mkdir -p out
-          cp dist/ClipboardManagerPro.exe out/ClipboardManagerPro-win32.exe
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
